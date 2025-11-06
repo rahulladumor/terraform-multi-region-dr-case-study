@@ -46,29 +46,85 @@ Production-ready **Active-Active Multi-Region DR** using pure Terraform HCL with
 
 ## 🏗️ Architecture
 
+### High-Level Architecture
+
+```mermaid
+graph TB
+    subgraph Global Services
+        R53[Route 53<br/>Health-based Routing<br/>Latency-based Routing]
+        CF[CloudFront<br/>Global CDN<br/>Origin Failover]
+    end
+    
+    subgraph Primary Region - us-east-1
+        subgraph US-East Network
+            VPC1[VPC 10.0.0.0/16]
+            ALB1[Application LB<br/>Multi-AZ]
+            EC2-1[EC2 Fleet<br/>Auto Scaling]
+        end
+        
+        subgraph US-East Data
+            Aurora1[Aurora Global DB<br/>PRIMARY<br/>Write Endpoint]
+            DDB1[DynamoDB<br/>Global Table<br/>us-east-1]
+            S3-1[S3 Bucket<br/>CRR Enabled]
+        end
+    end
+    
+    subgraph Secondary Region - us-west-2
+        subgraph US-West Network
+            VPC2[VPC 10.1.0.0/16]
+            ALB2[Application LB<br/>Multi-AZ]
+            EC2-2[EC2 Fleet<br/>Auto Scaling]
+        end
+        
+        subgraph US-West Data
+            Aurora2[Aurora Global DB<br/>SECONDARY<br/>Read Endpoint]
+            DDB2[DynamoDB<br/>Global Table<br/>us-west-2]
+            S3-2[S3 Bucket<br/>CRR Destination]
+        end
+    end
+    
+    subgraph DR Region - eu-west-1
+        subgraph EU-West Network
+            VPC3[VPC 10.2.0.0/16]
+            ALB3[Application LB<br/>Multi-AZ]
+            EC2-3[EC2 Fleet<br/>Auto Scaling]
+        end
+        
+        subgraph EU-West Data
+            Aurora3[Aurora Global DB<br/>SECONDARY<br/>Read Endpoint]
+            DDB3[DynamoDB<br/>Global Table<br/>eu-west-1]
+            S3-3[S3 Bucket<br/>CRR Destination]
+        end
+    end
+    
+    R53 -->|Health Check OK| CF
+    CF -->|Primary| ALB1
+    CF -.->|Failover| ALB2
+    CF -.->|Failover| ALB3
+    
+    ALB1 --> EC2-1
+    ALB2 --> EC2-2
+    ALB3 --> EC2-3
+    
+    EC2-1 -->|Read/Write| Aurora1
+    EC2-2 -->|Read Only| Aurora2
+    EC2-3 -->|Read Only| Aurora3
+    
+    Aurora1 -.->|<1s Replication| Aurora2
+    Aurora1 -.->|<1s Replication| Aurora3
+    
+    EC2-1 -->|Write| DDB1
+    EC2-2 -->|Write| DDB2
+    EC2-3 -->|Write| DDB3
+    
+    DDB1 <-.->|Bi-directional Sync| DDB2
+    DDB1 <-.->|Bi-directional Sync| DDB3
+    DDB2 <-.->|Bi-directional Sync| DDB3
+    
+    S3-1 -.->|Async Replication| S3-2
+    S3-1 -.->|Async Replication| S3-3
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Global Layer                             │
-├─────────────────────────────────────────────────────────────────┤
-│  Route53 (Health Checks + Failover) → CloudFront (Origin Fail)  │
-└─────────────────────────────────────────────────────────────────┘
-                                ↓
-    ┌───────────────────────────┬───────────────────────────┐
-    │                           │                           │
-┌───▼─────────┐         ┌───▼─────────┐         ┌───▼─────────┐
-│ us-east-1   │         │ us-west-2   │         │ eu-west-1   │
-├─────────────┤         ├─────────────┤         ├─────────────┤
-│ VPC + ALB   │◄───────►│ VPC + ALB   │◄───────►│ VPC + ALB   │
-│ EC2 ASG     │         │ EC2 ASG     │         │ EC2 ASG     │
-│ Aurora      │         │ Aurora      │         │ Aurora      │
-│ DynamoDB    │         │ DynamoDB    │         │ DynamoDB    │
-│ S3 Bucket   │         │ S3 Bucket   │         │ S3 Bucket   │
-└─────────────┘         └─────────────┘         └─────────────┘
-      ↕                       ↕                       ↕
-    Aurora Global Database (< 1 sec replication)
-    DynamoDB Global Tables (Active-Active writes)
-    S3 Cross-Region Replication (automatic)
-```
+
 
 ## 🚀 Quick Deploy
 
